@@ -1,79 +1,123 @@
-import { useEffect, useState } from "react";
 import {
-  useCartLines,
-  useAppMetafields,
   reactExtension,
-  Text,
   BlockStack,
+  Text,
+  useApi,
+  useCartLines,
   Banner,
 } from "@shopify/ui-extensions-react/checkout";
+import { useEffect, useState } from "react";
 
-// Register extension for checkout UI
-export default reactExtension("purchase.checkout.block.render", () => <ShippingDelayMessage />);
+export default reactExtension("purchase.checkout.block.render", () => (
+  <Extension />
+));
 
-function ShippingDelayMessage() {
-  // Fetch all cart lines
+function Extension() {
+  const { extension, query } = useApi();
   const cartLines = useCartLines();
-
-  // Attempt to fetch metafields from products in cart
-  const productMetafields = useAppMetafields({
-    namespace: "custom",
-    key: "shipping_delay",
-    type: "product",
-  });
-
+  const [metafields, setMetafields] = useState({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [shippingDelays, setShippingDelays] = useState([]);
 
   useEffect(() => {
-    if (cartLines.length === 0) {
-      setLoading(false);
-      return;
+    async function fetchMetafields() {
+      if (cartLines.length > 0) {
+        setLoading(true);
+        const productIds = cartLines.map((line) => line.merchandise.product.id);
+        console.log("Product IDs:", productIds); // Log the product IDs
+
+        // Log the entire product object for each line item
+        cartLines.forEach((line) => {
+          console.log("Product Object:", line.merchandise.product);
+        });
+
+        const graphqlQuery = `
+          query getProducts($ids: [ID!]!) {
+            products(ids: $ids) {
+              nodes {
+                id
+                title
+                metafields(first: 10) {
+                  edges {
+                    node {
+                      namespace
+                      key
+                      value
+                    }
+                  }
+                }
+              }
+            }
+          }
+        `;
+
+        try {
+          const response = await query(graphqlQuery, {
+            variables: {
+              ids: productIds,
+            },
+          });
+
+          if (response.data && response.data.products && response.data.products.nodes) {
+            const metafieldData = {};
+            response.data.products.nodes.forEach((product) => {
+              metafieldData[product.id] = {
+                title: product.title,
+                metafields: product.metafields.edges.map((edge) => ({
+                  namespace: edge.node.namespace,
+                  key: edge.node.key,
+                  value: edge.node.value,
+                })),
+              };
+            });
+            setMetafields(metafieldData);
+          }
+        } catch (error) {
+          console.error("Error fetching metafields:", error);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setLoading(false);
+      }
     }
 
-    console.log("Cart Lines:", cartLines);
-    console.log("Fetched Metafields:", productMetafields);
-
-    try {
-      const delays = cartLines.map((line) => {
-        const productId = line.merchandise?.product?.id;
-        const metafield = productMetafields.find(
-          (field) => field.target.id === productId
-        );
-
-        return {
-          id: line.id,
-          title: line.merchandise?.title || "Unknown Product",
-          shippingDelay: metafield?.metafield?.value || "Standard shipping applies",
-        };
-      });
-
-      setShippingDelays(delays);
-    } catch (err) {
-      setError("Failed to fetch shipping delays.");
-    } finally {
-      setLoading(false);
-    }
-  }, [cartLines, productMetafields]);
-
-  if (loading) {
-    return <Text>Loading shipping details...</Text>;
-  }
-
-  if (error) {
-    return <Banner title="Error" status="critical">{error}</Banner>;
-  }
+    fetchMetafields();
+  }, [cartLines, query]);
 
   return (
-    <BlockStack>
-      <Banner title="Shipping Delay Information" status="info">
-        {shippingDelays.map((item) => (
-          <Text key={item.id}>
-            <strong>{item.title}:</strong> {item.shippingDelay}
-          </Text>
-        ))}
+    <BlockStack border={"dotted"} padding={"tight"}>
+      <Banner title="Product Metafields Displayed Below">
+        Product Metafields Displayed Below
       </Banner>
+      {loading ? (
+        <Text>Loading product metafields...</Text>
+      ) : cartLines.length === 0 ? (
+        <Text>Your cart is empty.</Text>
+      ) : (
+        cartLines.map((line) => {
+          const productId = line.merchandise.product.id;
+          const productMetafields = metafields[productId];
+          if (productMetafields) {
+            return (
+              <BlockStack key={productId}>
+                <Text emphasis="bold">{productMetafields.title}</Text>
+                {productMetafields.metafields.map((metafield, index) => (
+                  <Text key={index}>
+                    {metafield.namespace}.{metafield.key}: {metafield.value}
+                  </Text>
+                ))}
+              </BlockStack>
+            );
+          } else {
+            return (
+              <BlockStack key={productId}>
+                <Text emphasis="bold">{line.merchandise.product.title}</Text>
+                <Text>Metafields not found.</Text>
+              </BlockStack>
+            );
+          }
+        })
+      )}
     </BlockStack>
   );
 }
