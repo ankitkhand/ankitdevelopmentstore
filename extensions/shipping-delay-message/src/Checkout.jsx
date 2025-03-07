@@ -1,59 +1,79 @@
+import { useEffect, useState } from "react";
 import {
+  useCartLines,
+  useAppMetafields,
   reactExtension,
-  Banner,
-  BlockStack,
-  Checkbox,
   Text,
-  useApi,
-  useApplyAttributeChange,
-  useInstructions,
-  useTranslate,
+  BlockStack,
+  Banner,
 } from "@shopify/ui-extensions-react/checkout";
 
-// 1. Choose an extension target
-export default reactExtension("purchase.checkout.block.render", () => (
-  <Extension />
-));
+// Register extension for checkout UI
+export default reactExtension("purchase.checkout.block.render", () => <ShippingDelayMessage />);
 
-function Extension() {
-  const translate = useTranslate();
-  const { extension } = useApi();
-  const instructions = useInstructions();
-  const applyAttributeChange = useApplyAttributeChange();
+function ShippingDelayMessage() {
+  // Fetch all cart lines
+  const cartLines = useCartLines();
 
+  // Attempt to fetch metafields from products in cart
+  const productMetafields = useAppMetafields({
+    namespace: "custom",
+    key: "shipping_delay",
+    type: "product",
+  });
 
-  // 2. Check instructions for feature availability, see https://shopify.dev/docs/api/checkout-ui-extensions/apis/cart-instructions for details
-  if (!instructions.attributes.canUpdateAttributes) {
-    // For checkouts such as draft order invoices, cart attributes may not be allowed
-    // Consider rendering a fallback UI or nothing at all, if the feature is unavailable
-    return (
-      <Banner title="shipping-delay-message" status="warning">
-        {translate("attributeChangesAreNotSupported")}
-      </Banner>
-    );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [shippingDelays, setShippingDelays] = useState([]);
+
+  useEffect(() => {
+    if (cartLines.length === 0) {
+      setLoading(false);
+      return;
+    }
+
+    console.log("Cart Lines:", cartLines);
+    console.log("Fetched Metafields:", productMetafields);
+
+    try {
+      const delays = cartLines.map((line) => {
+        const productId = line.merchandise?.product?.id;
+        const metafield = productMetafields.find(
+          (field) => field.target.id === productId
+        );
+
+        return {
+          id: line.id,
+          title: line.merchandise?.title || "Unknown Product",
+          shippingDelay: metafield?.metafield?.value || "Standard shipping applies",
+        };
+      });
+
+      setShippingDelays(delays);
+    } catch (err) {
+      setError("Failed to fetch shipping delays.");
+    } finally {
+      setLoading(false);
+    }
+  }, [cartLines, productMetafields]);
+
+  if (loading) {
+    return <Text>Loading shipping details...</Text>;
   }
 
-  // 3. Render a UI
+  if (error) {
+    return <Banner title="Error" status="critical">{error}</Banner>;
+  }
+
   return (
-    <BlockStack border={"dotted"} padding={"tight"}>
-      <Banner title="shipping-delay-message">
-        {translate("welcome", {
-          target: <Text emphasis="italic">{extension.target}</Text>,
-        })}
+    <BlockStack>
+      <Banner title="Shipping Delay Information" status="info">
+        {shippingDelays.map((item) => (
+          <Text key={item.id}>
+            <strong>{item.title}:</strong> {item.shippingDelay}
+          </Text>
+        ))}
       </Banner>
-      <Checkbox onChange={onCheckboxChange}>
-        {translate("iWouldLikeAFreeGiftWithMyOrder")}
-      </Checkbox>
     </BlockStack>
   );
-
-  async function onCheckboxChange(isChecked) {
-    // 4. Call the API to modify checkout
-    const result = await applyAttributeChange({
-      key: "requestedFreeGift",
-      type: "updateAttribute",
-      value: isChecked ? "yes" : "no",
-    });
-    console.log("applyAttributeChange result", result);
-  }
 }
